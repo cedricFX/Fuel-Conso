@@ -67,22 +67,26 @@
     margin:0 auto;
   }
   .plate{
-    position:relative;
     text-align:center;
     padding:10px 0 18px;
     border-bottom:1px solid var(--hairline);
     margin-bottom:18px;
   }
+  .plate-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:2px;
+  }
   .theme-toggle{
-    position:absolute;
-    top:8px; right:0;
+    flex-shrink:0;
     background:var(--panel);
     border:1px solid var(--hairline);
     color:var(--text-dim);
     font-family:'Oswald',sans-serif;
     font-size:10.5px;
     letter-spacing:1px;
-    padding:7px 11px;
+    padding:6px 10px;
     border-radius:20px;
     cursor:pointer;
   }
@@ -415,8 +419,10 @@
 <div class="frame">
 
   <div class="plate">
-    <div class="reg">ROBIN AVIATION</div>
-    <button type="button" id="themeToggle" class="theme-toggle" title="Changer de thème">☀ MODE CLAIR</button>
+    <div class="plate-top">
+      <span class="reg">ROBIN AVIATION</span>
+      <button type="button" id="themeToggle" class="theme-toggle" title="Changer de thème">☀ CLAIR</button>
+    </div>
     <h1>DR400 <span>// FUEL PLANNER</span></h1>
     <div class="sub" id="regInput">Bilan carburant &amp; suivi de vol en temps réel</div>
   </div>
@@ -746,6 +752,13 @@ function tickCountdown(){
   const color = remainMin <= 0 ? "var(--red)" : (remainMin <= 10 ? "var(--amber)" : "var(--green)");
   $("digCountdown").style.color = color;
   $("digMaxStop").style.color = color;
+
+  // Rafraîchit aussi la jauge en direct : si un point suivant vient d'être franchi
+  // dans le temps sans validation manuelle, la jauge continue de suivre l'estimation.
+  const cap = parseFloat($("cap").value) || 0;
+  const refIdx = getCurrentReferenceIndex();
+  currentFuel = refIdx === -1 ? getUsableEmbarque() : waypoints[refIdx].fuelReal;
+  setGauge(currentFuel, cap);
 }
 
 function fmtHM(hoursDecimal){
@@ -789,6 +802,18 @@ function setGauge(fuel, cap){
   const conso = parseFloat($("conso").value) || 1;
   $("digFuel").innerHTML = fuel.toFixed(1) + " <small>L / " + cap + " L</small>";
   $("digAuto").textContent = fmtHM(fuel/conso);
+}
+
+function getCurrentReferenceIndex(){
+  if(engineStartTs === null) return -1;
+  const elapsedMin = (Date.now() - engineStartTs) / 60000;
+  let best = -1;
+  waypoints.forEach((wp,idx)=>{
+    if(wp.tReal !== null && wp.fuelReal !== null && wp.tReal <= elapsedMin){
+      if(best === -1 || wp.tReal > waypoints[best].tReal) best = idx;
+    }
+  });
+  return best;
 }
 
 function recalcBilan(){
@@ -842,10 +867,17 @@ function recalcBilan(){
 
   $("reserveLabel").textContent = reserveMin;
 
-  const hasReal = waypoints.some(w=>w.tReal!=null && w.fuelReal!=null);
-  if(!hasReal){
+  const refIdx = getCurrentReferenceIndex();
+  if(refIdx === -1){
     baselineRefMin = 0;
     baselineRemainMin = conso > 0 ? (embarque/conso*60) - reserveMin : 0;
+  } else {
+    const wpRef = waypoints[refIdx];
+    const usedFuel = embarque - wpRef.fuelReal;
+    const consoReelle = wpRef.tReal > 0 ? usedFuel/(wpRef.tReal/60) : conso;
+    const autonomieMin = consoReelle > 0 ? (wpRef.fuelReal/consoReelle)*60 : 0;
+    baselineRefMin = wpRef.tReal;
+    baselineRemainMin = autonomieMin - reserveMin;
   }
 
   return {cap, conso, embarque, reserveMin, margeMin, taxiMin};
@@ -867,7 +899,6 @@ function renderNavLog(ctx){
 
   let cumulTempsPrevu = 0; // minutes
   let cumulFuelPrevu = 0;  // L
-  let lastRealIndex = -1;
 
   waypoints.forEach((wp,i)=>{
     const tempsPrevu = (wp.vit>0 && wp.dist>0) ? (wp.dist/wp.vit)*60 : 0;
@@ -899,7 +930,6 @@ function renderNavLog(ctx){
       ecartStr = (ecartMin>=0?"+":"") + Math.round(ecartMin) + " min";
       autonomieStr = fmtHM(autonomie);
       rowClass = (autonomie - (ctx.reserveMin+ctx.margeMin)/60) < 0 ? "alert" : "ok";
-      lastRealIndex = i;
     }
 
     const tr = document.createElement("tr");
@@ -935,17 +965,6 @@ function renderNavLog(ctx){
       <td colspan="4"></td>
     </tr>
   `;
-
-  if(lastRealIndex >= 0){
-    const wp = waypoints[lastRealIndex];
-    currentFuel = wp.fuelReal;
-    setGauge(currentFuel, ctx.cap);
-    const usedFuel = ctx.embarque - wp.fuelReal;
-    const consoReelle = wp.tReal > 0 ? usedFuel/(wp.tReal/60) : ctx.conso;
-    const autonomieMin = consoReelle > 0 ? (wp.fuelReal/consoReelle)*60 : 0;
-    baselineRefMin = wp.tReal;
-    baselineRemainMin = autonomieMin - ctx.reserveMin;
-  }
 }
 
 function renderLiveCards(ctx){
@@ -1041,6 +1060,9 @@ function updateLeg(i, field, value){
     waypoints[i][field] = (value === "" || isNaN(v)) ? null : v;
     if(field === "fuelReal") waypoints[i].fuelEstimated = false;
   }
+  if(field === "fuelReal" || field === "tReal"){
+    cascadeAutoFill(i);
+  }
   recalcAll();
 }
 
@@ -1066,6 +1088,33 @@ function estimateFuelAt(i, tRealMin){
   return Math.max(0, Math.round(est*10)/10);
 }
 
+// Recale automatiquement tous les points suivants (encore "estimés", donc pas verrouillés
+// manuellement) sur le programme prévu et la conso réelle la plus récente. Ainsi, si le
+// pilote oublie de valider un point en vol, celui-ci contient déjà une estimation cohérente
+// au lieu de rester vide, et la jauge/autonomie continuent de suivre le vol correctement.
+function cascadeAutoFill(fromIndex){
+  const taxiL = parseFloat($("taxi").value) || 0;
+  const conso = parseFloat($("conso").value) || 0;
+  const taxiMin = conso > 0 ? (taxiL/conso)*60 : 0;
+
+  let cumulTempsPrevu = 0;
+  for(let k=0; k<=fromIndex; k++){
+    const wp = waypoints[k];
+    cumulTempsPrevu += (wp.vit>0 && wp.dist>0) ? (wp.dist/wp.vit)*60 : 0;
+  }
+
+  for(let j=fromIndex+1; j<waypoints.length; j++){
+    const wp = waypoints[j];
+    cumulTempsPrevu += (wp.vit>0 && wp.dist>0) ? (wp.dist/wp.vit)*60 : 0;
+    if(wp.fuelReal !== null && wp.fuelEstimated === false) continue; // verrouillé manuellement par le pilote : ne pas écraser
+    if(!(wp.dist > 0)) continue; // point libre sans distance/vitesse : pas de programme à projeter
+    const projTReal = Math.round(taxiMin + cumulTempsPrevu);
+    wp.tReal = projTReal;
+    wp.fuelReal = estimateFuelAt(j, projTReal);
+    wp.fuelEstimated = true;
+  }
+}
+
 function markDecollage(i){
   if(engineStartTs === null){
     alert("Démarre d'abord le moteur avec le bouton MAINTENANT plus haut.");
@@ -1078,6 +1127,7 @@ function markDecollage(i){
   waypoints[i].tReal = Math.round(taxiMin);
   waypoints[i].fuelReal = Math.max(0, Math.round((embarque - taxiL)*10)/10);
   waypoints[i].fuelEstimated = true;
+  cascadeAutoFill(i);
   recalcAll();
 }
 
@@ -1093,6 +1143,7 @@ function markNow(i){
     waypoints[i].fuelReal = estimateFuelAt(i, waypoints[i].tReal);
     waypoints[i].fuelEstimated = true;
   }
+  cascadeAutoFill(i);
   recalcAll();
 }
 
@@ -1103,6 +1154,7 @@ function adjustTReal(i, delta){
   if(waypoints[i].fuelEstimated){
     waypoints[i].fuelReal = estimateFuelAt(i, waypoints[i].tReal);
   }
+  cascadeAutoFill(i);
   recalcAll();
 }
 
@@ -1113,11 +1165,9 @@ function removeLeg(i){
 
 function recalcAll(){
   const ctx = recalcBilan();
-  const hasReal = waypoints.some(w=>w.tReal!=null && w.fuelReal!=null);
-  if(!hasReal){
-    currentFuel = ctx.embarque;
-    setGauge(currentFuel, ctx.cap);
-  }
+  const refIdx = getCurrentReferenceIndex();
+  currentFuel = refIdx === -1 ? ctx.embarque : waypoints[refIdx].fuelReal;
+  setGauge(currentFuel, ctx.cap);
   renderNavLog(ctx);
   renderLiveCards(ctx);
 }
@@ -1399,7 +1449,7 @@ $("btnExportNav").addEventListener("click", exportNavPDF);
 // --- Thème clair / sombre ---
 function applyTheme(theme){
   document.body.classList.toggle("light-theme", theme === "light");
-  $("themeToggle").innerHTML = theme === "light" ? "🌙 MODE SOMBRE" : "☀ MODE CLAIR";
+  $("themeToggle").innerHTML = theme === "light" ? "🌙 SOMBRE" : "☀ CLAIR";
   try{ localStorage.setItem("dr400-theme", theme); }catch(e){}
 }
 $("themeToggle").addEventListener("click", ()=>{
