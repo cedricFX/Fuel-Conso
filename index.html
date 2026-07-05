@@ -30,6 +30,26 @@
     --red:#ff5c5c;
     --red-dim:#4a1d1d;
   }
+  body.light-theme{
+    --bg:#f5f5f7;
+    --panel:#ffffff;
+    --recessed:#eef0f2;
+    --hairline:#d8d8d8;
+    --hairline-soft:#e8e8e8;
+    --text:#2b2b2e;
+    --text-dim:#6b7280;
+    --amber:#946c00;
+    --amber-dim:#d9a94c;
+    --green:#1f7a4d;
+    --green-dim:#bfe8d4;
+    --red:#c8102e;
+    --red-dim:#fbd4da;
+  }
+  body.light-theme{ background-image:none; }
+  body.light-theme .panel{ box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 10px rgba(0,0,0,0.06); }
+  body.light-theme .field input[readonly]{ background:#e4e6e9; }
+  body.light-theme .gauge-readout .digits{ text-shadow:none; }
+  body.light-theme .time-input{ text-shadow:none; }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
   body{
@@ -47,11 +67,26 @@
     margin:0 auto;
   }
   .plate{
+    position:relative;
     text-align:center;
     padding:10px 0 18px;
     border-bottom:1px solid var(--hairline);
     margin-bottom:18px;
   }
+  .theme-toggle{
+    position:absolute;
+    top:8px; right:0;
+    background:var(--panel);
+    border:1px solid var(--hairline);
+    color:var(--text-dim);
+    font-family:'Oswald',sans-serif;
+    font-size:10.5px;
+    letter-spacing:1px;
+    padding:7px 11px;
+    border-radius:20px;
+    cursor:pointer;
+  }
+  .theme-toggle:hover{border-color:var(--amber-dim); color:var(--amber);}
   .plate .reg{
     font-family:'JetBrains Mono',monospace;
     font-size:11px;
@@ -217,8 +252,8 @@
     padding:14px 16px;
     margin-bottom:12px;
   }
-  .leg-card.alert{border-color:var(--red);}
-  .leg-card.ok{border-color:var(--green-dim);}
+  .leg-card.alert{border-color:var(--red); border-width:2px;}
+  .leg-card.ok{border-color:var(--green); border-width:2px;}
   .leg-card-top{
     display:flex; justify-content:space-between; align-items:center;
     margin-bottom:4px;
@@ -256,7 +291,7 @@
     margin-bottom:8px;
   }
   .fuel-big-input:focus{outline:none; border-color:var(--amber-dim);}
-  .fuel-big-input.estimated{border-style:dashed; border-color:var(--amber-dim); color:var(--amber-dim);}
+  .fuel-big-input.estimated{border-style:dashed; border-color:var(--amber-dim); color:var(--amber);}
   .leg-result{font-size:13px; color:var(--text); font-family:'JetBrains Mono',monospace;}
   .leg-result.muted{color:var(--text-dim); font-family:'Oswald',sans-serif; font-style:italic;}
   .leg-card .del-btn{font-size:18px;}
@@ -381,6 +416,7 @@
 
   <div class="plate">
     <div class="reg">ROBIN AVIATION</div>
+    <button type="button" id="themeToggle" class="theme-toggle" title="Changer de thème">☀ MODE CLAIR</button>
     <h1>DR400 <span>// FUEL PLANNER</span></h1>
     <div class="sub" id="regInput">Bilan carburant &amp; suivi de vol en temps réel</div>
   </div>
@@ -416,6 +452,10 @@
       <div class="field">
         <label>Conso croisière (L/h)</label>
         <input type="number" id="conso" min="1" step="0.5">
+      </div>
+      <div class="field">
+        <label>Fuel inutilisable (L)</label>
+        <input type="number" id="inutilisable" min="0" step="0.5" value="0">
       </div>
     </div>
     <div class="field-row" style="margin-bottom:0;">
@@ -461,11 +501,11 @@
       <div class="field" style="grid-column:1/-1;">
         <label>Fuel embarqué au décollage (L)</label>
         <input type="number" id="fuelEmbarque" min="0" step="0.5">
-        <span class="hint">Renseigné après avitaillement / lecture jauges au parking.</span>
+        <span class="hint">Quantité réelle dans le réservoir (jauges/avitaillement) — peut inclure le fuel inutilisable, il sera déduit automatiquement.</span>
       </div>
     </div>
     <div class="btn-row" style="margin-bottom:14px;">
-      <button class="btn" id="btnPleins">Pleins (capacité max)</button>
+      <button class="btn" id="btnPleins">Pleins (réservoir plein)</button>
     </div>
     <div class="ticket" id="ticket"></div>
     <div class="banner" id="banner"></div>
@@ -654,11 +694,11 @@
 
 <script>
 const VARIANTS = [
-  {name:"DR400-120 (120 cv)", cap:100, conso:25},
-  {name:"DR400-140 (160 cv)", cap:100, conso:32},
-  {name:"DR400-160 (160 cv)", cap:110, conso:30},
-  {name:"DR400-180 Régent (180 cv)", cap:110, conso:36},
-  {name:"Personnalisé", cap:100, conso:30},
+  {name:"DR400-120 (120 cv)", cap:100, conso:25, inutil:10},
+  {name:"DR400-140 (160 cv)", cap:100, conso:32, inutil:0},
+  {name:"DR400-160 (160 cv)", cap:110, conso:30, inutil:0},
+  {name:"DR400-180 Régent (180 cv)", cap:110, conso:36, inutil:0},
+  {name:"Personnalisé", cap:100, conso:30, inutil:0},
 ];
 
 const $ = id => document.getElementById(id);
@@ -721,7 +761,8 @@ function applyVariant(){
   const v = VARIANTS[variantSel.value];
   $("cap").value = v.cap;
   $("conso").value = v.conso;
-  $("fuelEmbarque").value = v.cap;
+  $("inutilisable").value = v.inutil || 0;
+  $("fuelEmbarque").value = v.cap + (v.inutil || 0);
   currentFuel = v.cap;
   recalcAll();
 }
@@ -758,7 +799,10 @@ function recalcBilan(){
   const reserveMin = parseFloat($("reserve").value) || 0;
   const margeMin = parseFloat($("marge").value) || 0;
   const degagMin = parseFloat($("degagement").value) || 0;
-  const embarque = parseFloat($("fuelEmbarque").value) || 0;
+  const inutil = parseFloat($("inutilisable").value) || 0;
+  const embarqueSaisi = parseFloat($("fuelEmbarque").value) || 0;
+  const totalReservoir = cap + inutil;
+  const embarque = Math.max(0, embarqueSaisi - inutil); // fuel réellement utilisable en vol
 
   const tempsVolH = volM/60;
   const fuelTrajet = tempsVolH * conso;
@@ -778,14 +822,16 @@ function recalcBilan(){
     <div class="line"><span>Marge sécurité (${margeMin} min)</span><span>${fuelMarge.toFixed(1)} L</span></div>
     <div class="line"><span>Dégagement (${degagMin} min)</span><span>${fuelDegagement.toFixed(1)} L</span></div>
     <div class="line total"><span>TOTAL NÉCESSAIRE</span><span>${total.toFixed(1)} L</span></div>
-    <div class="line"><span>Fuel embarqué</span><span>${embarque.toFixed(1)} L</span></div>
+    <div class="line"><span>Fuel embarqué (saisi)</span><span>${embarqueSaisi.toFixed(1)} L</span></div>
+    <div class="line"><span>dont inutilisable</span><span>-${inutil.toFixed(1)} L</span></div>
+    <div class="line"><span>Fuel utilisable</span><span>${embarque.toFixed(1)} L</span></div>
     <div class="line total"><span>MARGE</span><span>${solde>=0?"+":""}${solde.toFixed(1)} L (${fmtHM(solde/(conso||1))})</span></div>
   `;
 
   const banner = $("banner");
-  if(cap>0 && embarque > cap+0.01){
+  if(totalReservoir>0 && embarqueSaisi > totalReservoir+0.01){
     banner.className = "banner nogo";
-    banner.innerHTML = "FUEL EMBARQUÉ > CAPACITÉ<span class='sub'>Vérifier la valeur saisie</span>";
+    banner.innerHTML = "FUEL EMBARQUÉ > RÉSERVOIR<span class='sub'>Le réservoir total (utilisable + inutilisable) est de " + totalReservoir.toFixed(1) + " L — vérifie la valeur saisie</span>";
   } else if(solde >= 0){
     banner.className = "banner go";
     banner.innerHTML = "GO — MARGE POSITIVE<span class='sub'>Marge de " + fmtHM(solde/(conso||1)) + " au-delà du nécessaire</span>";
@@ -998,8 +1044,14 @@ function updateLeg(i, field, value){
   recalcAll();
 }
 
+function getUsableEmbarque(){
+  const raw = parseFloat($("fuelEmbarque").value) || 0;
+  const inutil = parseFloat($("inutilisable").value) || 0;
+  return Math.max(0, raw - inutil);
+}
+
 function estimateFuelAt(i, tRealMin){
-  const embarque = parseFloat($("fuelEmbarque").value) || 0;
+  const embarque = getUsableEmbarque();
   const consoDefaut = parseFloat($("conso").value) || 0;
   let consoEstime = consoDefaut;
   for(let j=i-1; j>=0; j--){
@@ -1022,7 +1074,7 @@ function markDecollage(i){
   const taxiL = parseFloat($("taxi").value) || 0;
   const conso = parseFloat($("conso").value) || 0;
   const taxiMin = conso > 0 ? (taxiL/conso)*60 : 0;
-  const embarque = parseFloat($("fuelEmbarque").value) || 0;
+  const embarque = getUsableEmbarque();
   waypoints[i].tReal = Math.round(taxiMin);
   waypoints[i].fuelReal = Math.max(0, Math.round((embarque - taxiL)*10)/10);
   waypoints[i].fuelEstimated = true;
@@ -1141,7 +1193,7 @@ $("gpxFile").addEventListener("change", (e)=>{
 
 // events
 variantSel.addEventListener("change", applyVariant);
-["cap","conso","taxi","reserve","marge","degagement","fuelEmbarque"].forEach(id=>{
+["cap","conso","taxi","reserve","marge","degagement","fuelEmbarque","inutilisable"].forEach(id=>{
   $(id).addEventListener("input", recalcAll);
 });
 function updateVolDisplay(){
@@ -1153,7 +1205,9 @@ function updateVolDisplay(){
 }
 $("volM").addEventListener("input", updateVolDisplay);
 $("btnPleins").addEventListener("click", ()=>{
-  $("fuelEmbarque").value = parseFloat($("cap").value) || 0;
+  const cap = parseFloat($("cap").value) || 0;
+  const inutil = parseFloat($("inutilisable").value) || 0;
+  $("fuelEmbarque").value = cap + inutil;
   recalcAll();
 });
 $("btnAdd").addEventListener("click", ()=>{
@@ -1274,7 +1328,7 @@ function exportNavPDF(){
   const immat = $("immat").value.trim() || "—";
   const pilote = $("pilote").value.trim() || "—";
   const conso = parseFloat($("conso").value) || 0;
-  const embarque = parseFloat($("fuelEmbarque").value) || 0;
+  const embarque = getUsableEmbarque();
   const reserveMin = parseFloat($("reserve").value) || 0;
   const margeMin = parseFloat($("marge").value) || 0;
   const taxi = parseFloat($("taxi").value) || 0;
@@ -1341,6 +1395,20 @@ function exportNavPDF(){
   window.print();
 }
 $("btnExportNav").addEventListener("click", exportNavPDF);
+
+// --- Thème clair / sombre ---
+function applyTheme(theme){
+  document.body.classList.toggle("light-theme", theme === "light");
+  $("themeToggle").innerHTML = theme === "light" ? "🌙 MODE SOMBRE" : "☀ MODE CLAIR";
+  try{ localStorage.setItem("dr400-theme", theme); }catch(e){}
+}
+$("themeToggle").addEventListener("click", ()=>{
+  const isLight = document.body.classList.contains("light-theme");
+  applyTheme(isLight ? "dark" : "light");
+});
+let savedTheme = "dark";
+try{ savedTheme = localStorage.getItem("dr400-theme") || "dark"; }catch(e){}
+applyTheme(savedTheme);
 
 // init
 variantSel.value = 0;
