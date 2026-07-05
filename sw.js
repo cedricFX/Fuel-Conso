@@ -1,4 +1,4 @@
-const CACHE_NAME = "dr400-fuel-v1";
+const CACHE_NAME = "dr400-fuel-v2";
 const ASSETS = [
   "./",
   "./index.html",
